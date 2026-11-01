@@ -1,5 +1,6 @@
 load("@bazel_skylib//lib:paths.bzl", "paths")
 load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
+load("@bazel_skylib//rules:copy_file.bzl", "copy_file")
 load(
     "//build/kernel/kleaf:constants.bzl",
     "DEFAULT_GKI_OUTS",
@@ -148,10 +149,6 @@ def define_mgk(
         if build == "ack":
             # "ack" build uses kernel/common-x.y (pure) instead of kernel/kernel-x.y (modified) repo as base_kernel
             ack_dir = "common"
-        elif build == "user":
-            # "user" build applies Kconfig.ext and mgk_*_defconfig in base_kernel, especially disabling
-            # CONFIG_MODULE_SIG_ALL, the result may be different from GKI.
-            ack_build = "ack"
         if True:
             # for device module tree
             mgk_build_config(
@@ -242,15 +239,14 @@ def define_mgk(
                 outs = [
                     ".config",
                 ] + dtb_files,
-                module_outs = common_eng_modules if build == "eng" else common_userdebug_modules if build == "userdebug" else [],
-                module_implicit_outs = common_user_modules if build == "user" else [],
+                module_outs = common_eng_modules if build == "eng" else common_userdebug_modules if build == "userdebug" else common_user_modules,
                 build_config = ":{}_build_config.{}".format(name, build),
                 kconfig_ext = ":Kconfig.ext",
                 make_goals = [
                     "modules",
                     "dtbs",
                 ],
-                strip_modules = False,
+                strip_modules = True,
                 base_kernel = select({
                     "//build/bazel_mgk_rules:kernel_version_6.1"     : "//{}-{}:kernel_aarch64_debug".format(ack_dir, "6.1"),
                     "//build/bazel_mgk_rules:kernel_version_6.6"     : "//{}-{}:kernel_aarch64_debug".format(ack_dir, "6.6"),
@@ -498,6 +494,37 @@ def define_mgk(
         kernel_build = ":{}.ack".format(name),
     )
 
+    copy_file(
+        name = "{}_system_dlkm_modules_load".format(name),
+        src = select({
+            "//build/bazel_mgk_rules:kernel_version_6.1"     : "//kernel-6.1:gki_system_dlkm_modules_arm64",
+            "//build/bazel_mgk_rules:kernel_version_6.6"     : "//kernel-6.6:gki_system_dlkm_modules_arm64",
+            "//build/bazel_mgk_rules:kernel_version_mainline": "//kernel-mainline:gki_system_dlkm_modules_arm64",
+            "//conditions:default"                           : "//kernel:gki_system_dlkm_modules_arm64",
+        }),
+        out = "system_dlkm.modules.load",
+    )
+
+    copy_to_dist_dir(
+        name = "{}_uapi_headers_dist".format(name),
+        data = [
+            ":{}_merged_uapi_headers.user".format(name),
+        ],
+        flat = True,
+    )
+
+    copy_to_dist_dir(
+        name = "{}_dist".format(name),
+        data = [
+            ":{}_kernel_aarch64.user".format(name),
+            ":{}.user".format(name),
+            ":{}_customer_modules_install.user".format(name),
+            ":{}_merged_uapi_headers.user".format(name),
+            ":{}_system_dlkm_modules_load".format(name),
+        ] + ([":{}_kernel_images.user".format(name)] if build_dtbo_image else []),
+        flat = True,
+        allow_duplicate_filenames = True,
+    )
 
 def _mgk_build_config_impl(ctx):
     content = []
@@ -526,8 +553,6 @@ DEVCIE_MODULES_INCLUDE="-I\\$(DEVICE_MODULES_PATH)/include"
                     kasan_config.append(overlay_config)
                 else:
                     defconfig.append(overlay_config)
-        if ctx.attr.gki_mixed_build:
-            defconfig.append("${ROOT_DIR}/" + ctx.attr.device_modules_dir + "/kernel/configs/sign.config")
         if ctx.attr.build_variant == "eng":
             defconfig.append("${ROOT_DIR}/" + ctx.attr.device_modules_dir + "/kernel/configs/eng.config")
         elif ctx.attr.build_variant == "userdebug":

@@ -1,12 +1,24 @@
 def _impl(repository_ctx):
     repository_content = ""
-    keys = ["DEFCONFIG_OVERLAYS","KERNEL_VERSION","SOURCE_DATE_EPOCH"]
-    for key in keys:
-      if key in repository_ctx.os.environ:
-          value = repository_ctx.os.environ[key].strip()
-      else:
-          value = ""
-      repository_content += '{} = "{}"\n'.format(key, value)
+    defaults = {
+        "DEFCONFIG_OVERLAYS": "",
+        "KERNEL_VERSION": "",
+        "SOURCE_DATE_EPOCH": "",
+    }
+    build_config_path = repository_ctx.path(Label("@//:build.config"))
+    if build_config_path.exists:
+        for line in repository_ctx.read(build_config_path).splitlines():
+            line = line.strip()
+            if line.startswith("KERNEL_DIR="):
+                defaults["KERNEL_VERSION"] = line.partition("=")[2].strip("\"'")
+            elif line.startswith("DEFCONFIG_OVERLAYS="):
+                defaults["DEFCONFIG_OVERLAYS"] = line.partition("=")[2].strip("\"'")
+    for key in ["DEFCONFIG_OVERLAYS", "KERNEL_VERSION", "SOURCE_DATE_EPOCH"]:
+        if key in repository_ctx.os.environ and repository_ctx.os.environ[key].strip():
+            value = repository_ctx.os.environ[key].strip()
+        else:
+            value = defaults[key]
+        repository_content += '{} = "{}"\n'.format(key, value)
 
     for key, value in repository_ctx.attr.additional_values.items():
         repository_content += '{} = "{}"\n'.format(key, value)
